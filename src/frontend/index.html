@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Analyzer</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; background: #f5f5f5; }
+        h1 { color: #232f3e; text-align: center; }
+        .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        input, button { width: 100%; padding: 12px; margin: 8px 0; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; }
+        button { background: #ff9900; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background: #ec7211; }
+        .hidden { display: none; }
+        .error { color: #d13212; background: #fce8e6; padding: 10px; border-radius: 4px; margin: 10px 0; }
+        .success { color: #1e8900; background: #e6f4ea; padding: 10px; border-radius: 4px; margin: 10px 0; }
+        .tabs { display: flex; margin-bottom: 16px; }
+        .tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; border-bottom: 2px solid #ccc; }
+        .tab.active { border-bottom-color: #ff9900; font-weight: bold; }
+        .info { font-size: 12px; color: #666; margin-top: 8px; }
+        #userInfo { text-align: center; margin-bottom: 10px; }
+        .logout { background: #666; }
+    </style>
+</head>
+<body>
+    <h1>📄 PDF Analyzer</h1>
+
+    <!-- Auth Section -->
+    <div id="authSection" class="card">
+        <div class="tabs">
+            <div class="tab active" onclick="showTab('login')">Login</div>
+            <div class="tab" onclick="showTab('signup')">Sign Up</div>
+        </div>
+        
+        <div id="loginForm">
+            <input type="email" id="loginEmail" placeholder="Email">
+            <input type="password" id="loginPassword" placeholder="Password">
+            <button onclick="login()">Login</button>
+        </div>
+        
+        <div id="signupForm" class="hidden">
+            <input type="email" id="signupEmail" placeholder="Email">
+            <input type="password" id="signupPassword" placeholder="Password (min 8 chars, upper+lower+number)">
+            <button onclick="signup()">Sign Up</button>
+        </div>
+
+        <div id="confirmForm" class="hidden">
+            <p class="info">Check your email for a verification code</p>
+            <input type="text" id="confirmCode" placeholder="Verification Code">
+            <button onclick="confirmSignup()">Confirm</button>
+        </div>
+        
+        <div id="authMessage"></div>
+    </div>
+
+    <!-- App Section (shown after login) -->
+    <div id="appSection" class="card hidden">
+        <div id="userInfo"></div>
+        <button class="logout" onclick="logout()">Logout</button>
+        
+        <hr style="margin: 20px 0;">
+        
+        <h3>Upload PDF</h3>
+        <input type="file" id="pdfFile" accept=".pdf">
+        <button onclick="uploadPdf()">Upload PDF</button>
+        <div id="uploadMessage"></div>
+        
+        <hr style="margin: 20px 0;">
+        
+        <h3>Test API</h3>
+        <button onclick="callHelloApi()">Call /hello API</button>
+        <pre id="apiResponse" style="background:#f0f0f0; padding:10px; overflow:auto; max-height:200px;"></pre>
+    </div>
+
+    <script>
+        // Configuration
+        const CONFIG = {
+            userPoolId: 'us-east-2_QNyvXp3ad',
+            clientId: '58bvl0sqtg6vg9mfd00g1rce39',
+            apiUrl: 'https://jzup99p8tg.execute-api.us-east-2.amazonaws.com/development',
+            region: 'us-east-2'
+        };
+
+        let idToken = null;
+        let accessToken = null;
+        let currentEmail = null;
+
+        function showTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab:${tab === 'login' ? 'first' : 'last'}-child`).classList.add('active');
+            document.getElementById('loginForm').classList.toggle('hidden', tab !== 'login');
+            document.getElementById('signupForm').classList.toggle('hidden', tab !== 'signup');
+            document.getElementById('confirmForm').classList.add('hidden');
+            document.getElementById('authMessage').innerHTML = '';
+        }
+
+        function showMessage(elementId, message, isError = false) {
+            document.getElementById(elementId).innerHTML = `<div class="${isError ? 'error' : 'success'}">${message}</div>`;
+        }
+
+        async function cognitoFetch(action, body) {
+            const res = await fetch(`https://cognito-idp.${CONFIG.region}.amazonaws.com/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-amz-json-1.1',
+                    'X-Amz-Target': `AWSCognitoIdentityProviderService.${action}`
+                },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.message || data.__type || 'Request failed');
+            return data;
+        }
+
+        async function signup() {
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            
+            if (!email || !password) return showMessage('authMessage', 'Please fill all fields', true);
+
+            try {
+                await cognitoFetch('SignUp', {
+                    ClientId: CONFIG.clientId,
+                    Username: email,
+                    Password: password,
+                    UserAttributes: [{ Name: 'email', Value: email }]
+                });
+                currentEmail = email;
+                document.getElementById('signupForm').classList.add('hidden');
+                document.getElementById('confirmForm').classList.remove('hidden');
+                showMessage('authMessage', 'Check your email for verification code.');
+            } catch (err) {
+                showMessage('authMessage', err.message, true);
+            }
+        }
+
+        async function confirmSignup() {
+            const code = document.getElementById('confirmCode').value;
+            try {
+                await cognitoFetch('ConfirmSignUp', {
+                    ClientId: CONFIG.clientId,
+                    Username: currentEmail,
+                    ConfirmationCode: code
+                });
+                showMessage('authMessage', 'Email verified! You can now login.');
+                showTab('login');
+                document.getElementById('loginEmail').value = currentEmail;
+            } catch (err) {
+                showMessage('authMessage', err.message, true);
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            if (!email || !password) return showMessage('authMessage', 'Please fill all fields', true);
+
+            try {
+                const res = await cognitoFetch('InitiateAuth', {
+                    AuthFlow: 'USER_PASSWORD_AUTH',
+                    ClientId: CONFIG.clientId,
+                    AuthParameters: { USERNAME: email, PASSWORD: password }
+                });
+                idToken = res.AuthenticationResult.IdToken;
+                accessToken = res.AuthenticationResult.AccessToken;
+                currentEmail = email;
+                localStorage.setItem('idToken', idToken);
+                localStorage.setItem('email', email);
+                showLoggedInState();
+            } catch (err) {
+                showMessage('authMessage', err.message, true);
+            }
+        }
+
+        function showLoggedInState() {
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('appSection').classList.remove('hidden');
+            document.getElementById('userInfo').innerHTML = `<strong>Logged in as:</strong> ${currentEmail}`;
+        }
+
+        function logout() {
+            idToken = accessToken = currentEmail = null;
+            localStorage.clear();
+            document.getElementById('authSection').classList.remove('hidden');
+            document.getElementById('appSection').classList.add('hidden');
+            document.getElementById('apiResponse').textContent = '';
+            document.getElementById('uploadMessage').innerHTML = '';
+        }
+
+        async function callHelloApi() {
+            try {
+                const res = await fetch(`${CONFIG.apiUrl}/hello`, {
+                    headers: { 'Authorization': `Bearer ${idToken}` }
+                });
+                const data = await res.json();
+                document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                document.getElementById('apiResponse').textContent = `Error: ${err.message}`;
+            }
+        }
+
+        async function uploadPdf() {
+            const file = document.getElementById('pdfFile').files[0];
+            if (!file) return showMessage('uploadMessage', 'Please select a PDF file', true);
+            if (!file.name.toLowerCase().endsWith('.pdf')) return showMessage('uploadMessage', 'Please select a PDF file', true);
+            
+            showMessage('uploadMessage', 'Getting upload URL...');
+            
+            try {
+                // Step 1: Get presigned URL from backend
+                const urlRes = await fetch(`${CONFIG.apiUrl}/upload`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${idToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: file.name,
+                        contentType: 'application/pdf'
+                    })
+                });
+                
+                if (!urlRes.ok) throw new Error('Failed to get upload URL');
+                const { uploadUrl, fileId, key } = await urlRes.json();
+                
+                showMessage('uploadMessage', 'Uploading file...');
+                
+                // Step 2: Upload file directly to S3 using presigned URL
+                const uploadRes = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/pdf' },
+                    body: file
+                });
+                
+                if (!uploadRes.ok) throw new Error('Upload failed');
+                
+                showMessage('uploadMessage', `✅ File uploaded successfully!<br><small>File ID: ${fileId}<br>Key: ${key}</small>`);
+            } catch (err) {
+                showMessage('uploadMessage', `Upload failed: ${err.message}`, true);
+            }
+        }
+
+        window.onload = () => {
+            const savedToken = localStorage.getItem('idToken');
+            const savedEmail = localStorage.getItem('email');
+            if (savedToken && savedEmail) {
+                idToken = savedToken;
+                currentEmail = savedEmail;
+                showLoggedInState();
+            }
+        };
+    </script>
+</body>
+</html>
