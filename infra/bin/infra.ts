@@ -1,8 +1,9 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
-import { CoreStack } from '../lib/core-stack';
+import { FrontendStack } from '../lib/frontend-stack';
 import { DataStack } from '../lib/data-stack';
-import { AppStack } from '../lib/app-stack';
+import { CoreStack } from '../lib/core-stack';
+import {BackendStack} from "../lib/backend-stack";
 
 const app = new cdk.App();
 const stackEnv = app.node.tryGetContext('environment');
@@ -24,23 +25,14 @@ const baseProps: cdk.StackProps = {
   },
 };
 
-// Stack deployment order:
-// 1. CoreStack - Frontend infrastructure (CloudFront + S3 website)
-// 2. DataStack - Data infrastructure (S3 PDFs + DynamoDB)
-// 3. AppStack - Backend infrastructure (API Gateway + Lambda + Cognito)
 
+const frontendStack = new FrontendStack(app, `${stackName}-frontend-${stackEnv}`, stackEnv, localEnv, baseProps);
+const backendStack = new BackendStack(app, `${stackName}-backend-${stackEnv}`, stackEnv, localEnv, baseProps);
+const dataStack = new DataStack(app, `${stackName}-data-${stackEnv}`, stackEnv, localEnv, baseProps);
 const coreStack = new CoreStack(app, `${stackName}-core-${stackEnv}`, stackEnv, localEnv, baseProps);
 
-const dataStack = new DataStack(app, `${stackName}-data-${stackEnv}`, stackEnv, localEnv, baseProps);
-
-const appStack = new AppStack(app, `${stackName}-app-${stackEnv}`, stackEnv, localEnv, {
-  ...baseProps,
-  pdfBucket: dataStack.pdfBucket,
-  metadataTable: dataStack.metadataTable,
-  userQuotaTable: dataStack.userQuotaTable,
-  newUserQuota: dataStack.newUserQuota,
-});
-
 // Dependencies
-appStack.node.addDependency(dataStack);
-appStack.node.addDependency(coreStack);
+dataStack.node.addDependency(coreStack);
+frontendStack.node.addDependency(coreStack);
+backendStack.node.addDependency(dataStack);
+frontendStack.node.addDependency(backendStack);

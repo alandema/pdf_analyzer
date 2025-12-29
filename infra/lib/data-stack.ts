@@ -2,35 +2,32 @@ import { Stack, StackProps, RemovalPolicy, Duration } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as path from 'path';
 import { Construct } from 'constructs';
-import { createStackParameters, getSsmParameters } from './parameters';
+import { createStackParameters, getSsmParameters, getStackParameters } from './parameters';
 
 const inputSsmParams = {
-  NEW_USER_QUOTA: 'NEW_USER_QUOTA',
+  NEW_USER_QUOTA: 'NEW_USER_QUOTA'
 };
 
-export class DataStack extends Stack {
-  public readonly pdfBucket: s3.Bucket;
-  public readonly metadataTable: dynamodb.TableV2;
-  public readonly userQuotaTable: dynamodb.TableV2;
-  public readonly dataProcessorFunction: lambda.Function;
-  public readonly newUserQuota: string;
+const stackParams = {
+  USER_QUOTA_TABLE_NAME: 'USER_QUOTA_TABLE_NAME'
+}
 
+export class DataStack extends Stack {
   constructor(scope: Construct, id: string, stackEnv: string, localEnv: any, props?: StackProps) {
     super(scope, id, props);
 
     // Read SSM parameters
     const ssmParams = getSsmParameters(this, stackEnv, inputSsmParams);
-    this.newUserQuota = ssmParams.NEW_USER_QUOTA;
-
-
+    const importedParams = getStackParameters(this, stackEnv, stackParams);
 
     // S3 Bucket for PDF storage with lifecycle rules
-    this.pdfBucket = new s3.Bucket(this, 'PdfBucket', {
+    const pdfBucket = new s3.Bucket(this, 'PdfBucket', {
       bucketName: `pdf-analyzer-uploads-${stackEnv}-${this.account}`,
-      encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
       autoDeleteObjects: stackEnv !== 'production',
@@ -53,7 +50,7 @@ export class DataStack extends Stack {
     });
 
     // DynamoDB table for metadata with TTL
-    this.metadataTable = new dynamodb.TableV2(this, 'MetadataTable', {
+    const metadataTable = new dynamodb.TableV2(this, 'MetadataTable', {
       tableName: `pdf-analyzer-metadata-${stackEnv}`,
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
@@ -61,12 +58,21 @@ export class DataStack extends Stack {
       timeToLiveAttribute: 'ttl',
     });
 
-    // DynamoDB table for user quota tracking
-    this.userQuotaTable = new dynamodb.TableV2(this, 'UserQuotaTable', {
-      tableName: `pdf-analyzer-user-quota-${stackEnv}`,
-      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
-      billing: dynamodb.Billing.onDemand(),
+    // Processed PDF bucket
+    const processedBucket = new s3.Bucket(this, 'ProcessedPdfBucket', {
+      bucketName: `pdf-analyzer-processed-${stackEnv}-${this.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+      autoDeleteObjects: stackEnv !== 'production',
+    });
+
+    // EventBridge bus and DLQ
+    const eventBus = new events.EventBus(this, 'PdfEventBus', {
+      eventBusName: `pdf-analyzer-bus-${stackEnv}`,
+    });
+
+    const dlq = new sqs.Queue(this, 'PdfEventDlq', {
+      queueName: `pdf-analyzer-dlq-${stackEnv}`,
     });
 
     // Lambda Layer with dependencies (numpy, python-dotenv) bundled via Docker
@@ -86,10 +92,10 @@ export class DataStack extends Stack {
     });
 
     // Data processor Lambda function
-    this.dataProcessorFunction = new lambda.Function(this, 'DataProcessorFunction', {
+    const dataProcessorFunction = new lambda.Function(this, 'DataProcessorFunction', {
       functionName: `pdf-analyzer-data-processor-${stackEnv}`,
       runtime: lambda.Runtime.PYTHON_3_13,
-      handler: 'main.lambda_handler',
+      handler: 'processor.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../src/data'), {
         exclude: ['requirements.txt'],
       }),
@@ -98,25 +104,30 @@ export class DataStack extends Stack {
       memorySize: 512,
       environment: {
         ENVIRONMENT: stackEnv,
-        PDF_BUCKET_NAME: this.pdfBucket.bucketName,
-        METADATA_TABLE_NAME: this.metadataTable.tableName,
+        PDF_BUCKET_NAME: pdfBucket.bucketName,
+        PROCESSED_BUCKET_NAME: processedBucket.bucketName,
+        METADATA_TABLE_NAME: metadataTable.tableName,
       },
     });
 
     // Grant Lambda permissions
-    this.pdfBucket.grantReadWrite(this.dataProcessorFunction);
-    this.metadataTable.grantReadWriteData(this.dataProcessorFunction);
+    pdfBucket.grantRead(dataProcessorFunction);
+    processedBucket.grantWrite(dataProcessorFunction);
+    metadataTable.grantReadWriteData(dataProcessorFunction);
+
+    // EventBridge rule to trigger processor
+    new events.Rule(this, 'PdfUploadedRule', {
+      eventBus,
+      eventPattern: { source: ['pdf-analyzer'], detailType: ['PDF_UPLOADED'] },
+      targets: [new targets.LambdaFunction(dataProcessorFunction, { deadLetterQueue: dlq })],
+    });
 
     // Export values for other stacks
     createStackParameters(this, stackEnv, {
-      PDF_BUCKET_NAME: this.pdfBucket.bucketName,
-      PDF_BUCKET_ARN: this.pdfBucket.bucketArn,
-      METADATA_TABLE_NAME: this.metadataTable.tableName,
-      METADATA_TABLE_ARN: this.metadataTable.tableArn,
-      USER_QUOTA_TABLE_NAME: this.userQuotaTable.tableName,
-      USER_QUOTA_TABLE_ARN: this.userQuotaTable.tableArn,
-      NEW_USER_QUOTA: this.newUserQuota,
-      DATA_PROCESSOR_FUNCTION_ARN: this.dataProcessorFunction.functionArn,
+      PDF_BUCKET_NAME: pdfBucket.bucketName,
+      METADATA_TABLE_NAME: metadataTable.tableName,
+      DATA_PROCESSOR_FUNCTION_ARN: dataProcessorFunction.functionArn,
+      EVENT_BUS_NAME: eventBus.eventBusName,
     });
   }
 }

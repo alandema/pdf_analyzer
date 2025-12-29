@@ -4,6 +4,7 @@ import os
 
 
 def handler(event, context):
+    print(json.dumps(event))
     """Handle API Gateway requests and return a hello world response."""
     return {
         "statusCode": 200,

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { signUp, confirmSignUp, signIn } from '@/auth';
-import { getUploadUrl, uploadToS3, callHelloApi } from '@/api';
+import { uploadPdf, callHelloApi } from '@/api';
 
 type AuthState = 'login' | 'signup' | 'confirm' | 'authenticated';
 
@@ -79,12 +79,8 @@ export default function Home() {
     }
 
     try {
-      setUploadMessage({ text: 'Getting upload URL...', isError: false });
-      const { uploadUrl, fileId, key } = await getUploadUrl(idToken, file.name);
-      
       setUploadMessage({ text: 'Uploading file...', isError: false });
-      await uploadToS3(uploadUrl, file);
-      
+      const { fileId } = await uploadPdf(idToken, file);
       setUploadMessage({ text: `✅ Uploaded! File ID: ${fileId}`, isError: false });
     } catch (err: any) {
       setUploadMessage({ text: `Upload failed: ${err.message}`, isError: true });

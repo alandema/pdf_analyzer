@@ -1,70 +1,61 @@
-import { Stack, StackProps, RemovalPolicy } from 'aws-cdk-lib';
-import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
-import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as path from 'path';
-import { execSync } from 'child_process';
+import { Stack, StackProps, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
-import { createStackParameters } from './parameters';
+import { createStackParameters, getSsmParameters} from './parameters';
+
+const inputSsmParams = {
+  NEW_USER_QUOTA: 'NEW_USER_QUOTA'
+};
+
 
 export class CoreStack extends Stack {
-  public readonly websiteBucket: s3.Bucket;
-  public readonly distribution: cloudfront.Distribution;
-
-  constructor(scope: Construct, id: string, stackEnv: string, localEnv: any, props?: StackProps) {
+  constructor(scope: Construct, id: string, stackEnv: string, localEnv: any, props: StackProps) {
     super(scope, id, props);
 
-    const frontendPath = path.join(__dirname, '../../src/frontend');
+    const ssmParams = getSsmParameters(this, stackEnv, inputSsmParams);
 
-    // Build Next.js static export
-    console.log('Building Next.js frontend...');
-    execSync('npm install && npm run build', { cwd: frontendPath, stdio: 'inherit' });
-
-    // S3 Bucket for static website hosting
-    this.websiteBucket = new s3.Bucket(this, 'WebsiteBucket', {
-      bucketName: `pdf-analyzer-frontend-${stackEnv}-${this.account}`,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
-      autoDeleteObjects: stackEnv !== 'production',
-    });
-
-    // CloudFront distribution with OAC
-    this.distribution = new cloudfront.Distribution(this, 'Distribution', {
-      defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(this.websiteBucket),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+    // Cognito User Pool for authentication
+    const userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: `pdf-analyzer-users-${stackEnv}`,
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: false,
       },
-      defaultRootObject: 'index.html',
-      errorResponses: [
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html', // SPA support
-        },
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-        },
-      ],
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
 
-    // Deploy Next.js static export to S3 and invalidate CloudFront
-    new s3deploy.BucketDeployment(this, 'DeployWebsite', {
-      sources: [s3deploy.Source.asset(path.join(frontendPath, 'out'))],
-      destinationBucket: this.websiteBucket,
-      distribution: this.distribution,
-      distributionPaths: ['/*'],
+    const userPoolClient = userPool.addClient('WebClient', {
+      userPoolClientName: `pdf-analyzer-web-client-${stackEnv}`,
+      authFlows: {
+        userPassword: true,
+        userSrp: true,
+      },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+      },
     });
 
-    // Export values for other stacks
+    // DynamoDB table for user quota tracking
+    const userQuotaTable = new dynamodb.TableV2(this, 'UserQuotaTable', {
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+    });
+
     createStackParameters(this, stackEnv, {
-      WEBSITE_BUCKET_NAME: this.websiteBucket.bucketName,
-      DISTRIBUTION_ID: this.distribution.distributionId,
-      DISTRIBUTION_DOMAIN: this.distribution.distributionDomainName,
+      USER_POOL_ID: userPool.userPoolId,
+      USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
+      USER_QUOTA_TABLE_NAME: userQuotaTable.tableName,
     });
+
   }
 }
