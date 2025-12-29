@@ -16,6 +16,7 @@ const inputStackParams = {
   USER_POOL_CLIENT_ID: 'USER_POOL_CLIENT_ID',
   USER_QUOTA_TABLE_NAME: 'USER_QUOTA_TABLE_NAME',
   PDF_BUCKET_NAME: 'PDF_BUCKET_NAME',
+  PROCESSED_BUCKET_NAME: 'PROCESSED_BUCKET_NAME',
   METADATA_TABLE_NAME: 'METADATA_TABLE_NAME',
   EVENT_BUS_NAME: 'EVENT_BUS_NAME',
 };
@@ -35,6 +36,7 @@ export class BackendStack extends Stack {
     const ssmParams = getSsmParameters(this, stackEnv, inputSsmParams);
 
     const pdfBucket = s3.Bucket.fromBucketName(this, 'ImportedPdfBucket', stackParams.PDF_BUCKET_NAME);
+    const processedBucket = s3.Bucket.fromBucketName(this, 'ImportedProcessedBucket', stackParams.PROCESSED_BUCKET_NAME);
     const userQuotaTable = dynamodb.TableV2.fromTableName(this, 'ImportedUserQuotaTable', stackParams.USER_QUOTA_TABLE_NAME);
     const eventBus = events.EventBus.fromEventBusName(this, 'ImportedEventBus', stackParams.EVENT_BUS_NAME);
 
@@ -89,10 +91,28 @@ export class BackendStack extends Stack {
       },
     });
 
+    // Lambda function for listing processed PDFs
+    const getProcessedPdfsFunction = new lambda.Function(this, 'GetProcessedPdfsFunction', {
+      functionName: `pdf-analyzer-get-processed-pdfs-${stackEnv}`,
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'get_processed_pdfs.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../src/backend')),
+      timeout: Duration.seconds(30),
+      layers: [backendLayer],
+      memorySize: 256,
+      environment: {
+        ENVIRONMENT: stackEnv,
+        PROCESSED_BUCKET_NAME: stackParams.PROCESSED_BUCKET_NAME,
+        URL_EXPIRY_SECONDS: '900',
+      },
+    });
+
     // Permissions
     pdfBucket.grantPut(uploadFunction);
     userQuotaTable.grantReadWriteData(uploadFunction);
     eventBus.grantPutEventsTo(uploadFunction);
+
+    processedBucket.grantRead(getProcessedPdfsFunction);
 
 
     // REST API with CORS
@@ -134,6 +154,13 @@ export class BackendStack extends Stack {
     // Upload endpoint (protected with Cognito) - generates presigned URL
     const uploadResource = api.root.addResource('upload');
     uploadResource.addMethod('POST', new apigateway.LambdaIntegration(uploadFunction), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO,
+    });
+
+    // Processed PDFs endpoint (protected with Cognito) - returns list + presigned download links
+    const processedResource = api.root.addResource('processed');
+    processedResource.addMethod('GET', new apigateway.LambdaIntegration(getProcessedPdfsFunction), {
       authorizer,
       authorizationType: apigateway.AuthorizationType.COGNITO,
     });

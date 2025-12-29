@@ -2,6 +2,7 @@ import { Stack, StackProps, RemovalPolicy, Duration } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
@@ -58,6 +59,13 @@ export class DataStack extends Stack {
       timeToLiveAttribute: 'ttl',
     });
 
+    const processingConfigTable = new dynamodb.TableV2(this, 'ProcessingConfigTable', {
+      tableName: `pdf-analyzer-processing-config-${stackEnv}`,
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+    });
+
     // Processed PDF bucket
     const processedBucket = new s3.Bucket(this, 'ProcessedPdfBucket', {
       bucketName: `pdf-analyzer-processed-${stackEnv}-${this.account}`,
@@ -107,6 +115,7 @@ export class DataStack extends Stack {
         PDF_BUCKET_NAME: pdfBucket.bucketName,
         PROCESSED_BUCKET_NAME: processedBucket.bucketName,
         METADATA_TABLE_NAME: metadataTable.tableName,
+        PROCESSING_CONFIG_TABLE_NAME: processingConfigTable.tableName,
       },
     });
 
@@ -114,6 +123,17 @@ export class DataStack extends Stack {
     pdfBucket.grantRead(dataProcessorFunction);
     processedBucket.grantWrite(dataProcessorFunction);
     metadataTable.grantReadWriteData(dataProcessorFunction);
+    processingConfigTable.grantReadData(dataProcessorFunction);
+
+    // Allow invoking Bedrock models from this Lambda
+    dataProcessorFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel','bedrock:InvokeModelWithResponseStream','bedrock:Converse','bedrock:ConverseStream'],
+      resources: [`arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:foundation-model/*`,
+        `arn:aws:bedrock:*::inference-profile/*`,
+        `arn:aws:bedrock:*::foundation-model/*`
+      ],
+    }));
 
     // EventBridge rule to trigger processor
     new events.Rule(this, 'PdfUploadedRule', {
@@ -125,9 +145,10 @@ export class DataStack extends Stack {
     // Export values for other stacks
     createStackParameters(this, stackEnv, {
       PDF_BUCKET_NAME: pdfBucket.bucketName,
+      PROCESSED_BUCKET_NAME: processedBucket.bucketName,
       METADATA_TABLE_NAME: metadataTable.tableName,
       DATA_PROCESSOR_FUNCTION_ARN: dataProcessorFunction.functionArn,
-      EVENT_BUS_NAME: eventBus.eventBusName,
+      EVENT_BUS_NAME: eventBus.eventBusName
     });
   }
 }

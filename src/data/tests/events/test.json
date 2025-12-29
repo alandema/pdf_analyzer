@@ -1,0 +1,17 @@
+{
+    "version": "0",
+    "id": "391d2867-9652-d410-16c1-0045dc58a9c4",
+    "detail-type": "PDF_UPLOADED",
+    "source": "pdf-analyzer",
+    "account": "903114375980",
+    "time": "2025-12-29T20:15:46Z",
+    "region": "us-east-2",
+    "resources": [],
+    "detail": {
+        "bucket": "pdf-analyzer-uploads-development-903114375980",
+        "key": "31bb1590-80e1-7059-a4fc-74dbd6d0f119/2025/12/29/07d964ef-2bd2-4942-afd4-c2fcc679ac95.pdf",
+        "userId": "31bb1590-80e1-7059-a4fc-74dbd6d0f119",
+        "fileId": "07d964ef-2bd2-4942-afd4-c2fcc679ac95",
+        "filename": "alan_en_resume.pdf"
+    }
+}

@@ -20,9 +20,27 @@ export async function uploadPdf(idToken: string, file: File): Promise<{ fileId: 
   return res.json();
 }
 
-export async function callHelloApi(idToken: string): Promise<object> {
-  const res = await fetch(`${config.apiUrl}/hello`, {
+export interface ProcessedFile {
+  key: string;
+  name: string;
+  url: string;
+  lastModified: string | null;
+  size: number;
+}
+
+export interface ProcessedDate {
+  date: string;
+  files: ProcessedFile[];
+}
+
+export interface ProcessedPdfsResponse {
+  dates: ProcessedDate[];
+}
+
+export async function getProcessedPdfs(idToken: string): Promise<ProcessedPdfsResponse> {
+  const res = await fetch(`${config.apiUrl}/processed`, {
     headers: { 'Authorization': `Bearer ${idToken}` },
   });
+  if (!res.ok) throw new Error('Failed to fetch processed PDFs');
   return res.json();
 }
