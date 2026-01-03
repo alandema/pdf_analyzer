@@ -8,23 +8,16 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as path from 'path';
 import { Construct } from 'constructs';
-import { createStackParameters, getSsmParameters, getStackParameters } from './parameters';
+import { createStackParameters, getSsmParameters } from './parameters';
 
-const inputSsmParams = {
-  NEW_USER_QUOTA: 'NEW_USER_QUOTA'
+const ssmParams = {
 };
-
-const stackParams = {
-  USER_QUOTA_TABLE_NAME: 'USER_QUOTA_TABLE_NAME'
-}
 
 export class DataStack extends Stack {
   constructor(scope: Construct, id: string, stackEnv: string, localEnv: any, props?: StackProps) {
     super(scope, id, props);
 
-    // Read SSM parameters
-    const ssmParams = getSsmParameters(this, stackEnv, inputSsmParams);
-    const importedParams = getStackParameters(this, stackEnv, stackParams);
+    const params = getSsmParameters(this, stackEnv, ssmParams);
 
     // S3 Bucket for PDF storage with lifecycle rules
     const pdfBucket = new s3.Bucket(this, 'PdfBucket', {
@@ -51,16 +44,17 @@ export class DataStack extends Stack {
     });
 
     // DynamoDB table for metadata with TTL
-    const metadataTable = new dynamodb.TableV2(this, 'MetadataTable', {
-      tableName: `pdf-analyzer-metadata-${stackEnv}`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+    const pdfsTable = new dynamodb.TableV2(this, 'PDFsTable', {
+      tableName: `pdf-analyzer-pdfs-${stackEnv}`,
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'pdf_id', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
       timeToLiveAttribute: 'ttl',
     });
 
-    const processingConfigTable = new dynamodb.TableV2(this, 'ProcessingConfigTable', {
-      tableName: `pdf-analyzer-processing-config-${stackEnv}`,
+    const configsTable = new dynamodb.TableV2(this, 'ConfigsTable', {
+      tableName: `pdf-analyzer-configs-${stackEnv}`,
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
@@ -75,8 +69,8 @@ export class DataStack extends Stack {
     });
 
     // EventBridge bus and DLQ
-    const eventBus = new events.EventBus(this, 'PdfEventBus', {
-      eventBusName: `pdf-analyzer-bus-${stackEnv}`,
+    const uploadEventBus = new events.EventBus(this, 'PdfEventBus', {
+      eventBusName: `pdf-analyzer-upload-bus-${stackEnv}`,
     });
 
     const dlq = new sqs.Queue(this, 'PdfEventDlq', {
@@ -112,18 +106,18 @@ export class DataStack extends Stack {
       memorySize: 512,
       environment: {
         ENVIRONMENT: stackEnv,
-        PDF_BUCKET_NAME: pdfBucket.bucketName,
-        PROCESSED_BUCKET_NAME: processedBucket.bucketName,
-        METADATA_TABLE_NAME: metadataTable.tableName,
-        PROCESSING_CONFIG_TABLE_NAME: processingConfigTable.tableName,
+        RAW_PDF_BUCKET_NAME: pdfBucket.bucketName,
+        PROCESSED_PDF_BUCKET_NAME: processedBucket.bucketName,
+        PDFS_TABLE_NAME: pdfsTable.tableName,
+        CONFIGS_TABLE_NAME: configsTable.tableName,
       },
     });
 
     // Grant Lambda permissions
     pdfBucket.grantRead(dataProcessorFunction);
     processedBucket.grantWrite(dataProcessorFunction);
-    metadataTable.grantReadWriteData(dataProcessorFunction);
-    processingConfigTable.grantReadData(dataProcessorFunction);
+    pdfsTable.grantReadWriteData(dataProcessorFunction);
+    configsTable.grantReadData(dataProcessorFunction);
 
     // Allow invoking Bedrock models from this Lambda
     dataProcessorFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -137,18 +131,16 @@ export class DataStack extends Stack {
 
     // EventBridge rule to trigger processor
     new events.Rule(this, 'PdfUploadedRule', {
-      eventBus,
+      eventBus: uploadEventBus,
       eventPattern: { source: ['pdf-analyzer'], detailType: ['PDF_UPLOADED'] },
       targets: [new targets.LambdaFunction(dataProcessorFunction, { deadLetterQueue: dlq })],
     });
 
-    // Export values for other stacks
     createStackParameters(this, stackEnv, {
-      PDF_BUCKET_NAME: pdfBucket.bucketName,
-      PROCESSED_BUCKET_NAME: processedBucket.bucketName,
-      METADATA_TABLE_NAME: metadataTable.tableName,
-      DATA_PROCESSOR_FUNCTION_ARN: dataProcessorFunction.functionArn,
-      EVENT_BUS_NAME: eventBus.eventBusName
+      RAW_PDF_BUCKET_NAME: pdfBucket.bucketName,
+      PROCESSED_PDF_BUCKET_NAME: processedBucket.bucketName,
+      PDFS_TABLE_NAME: pdfsTable.tableName,
+      UPLOAD_EVENT_BUS_NAME: uploadEventBus.eventBusName,
     });
   }
 }

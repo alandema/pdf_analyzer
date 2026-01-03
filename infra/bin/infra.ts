@@ -32,7 +32,7 @@ const dataStack = new DataStack(app, `${stackName}-data-${stackEnv}`, stackEnv, 
 const coreStack = new CoreStack(app, `${stackName}-core-${stackEnv}`, stackEnv, localEnv, baseProps);
 
 // Dependencies
-dataStack.node.addDependency(coreStack);
-frontendStack.node.addDependency(coreStack);
 backendStack.node.addDependency(dataStack);
+backendStack.node.addDependency(coreStack);
+frontendStack.node.addDependency(coreStack);
 frontendStack.node.addDependency(backendStack);

@@ -5,15 +5,19 @@ import uuid
 import base64
 from datetime import datetime, timezone
 import boto3
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'), override=False)
 
 s3 = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 events = boto3.client('events')
 
-BUCKET_NAME = os.environ['PDF_BUCKET_NAME']
+RAW_PDF_BUCKET_NAME = os.environ['RAW_PDF_BUCKET_NAME']
 USER_QUOTA_TABLE_NAME = os.environ['USER_QUOTA_TABLE_NAME']
 NEW_USER_QUOTA = int(os.environ.get('NEW_USER_QUOTA', '10'))
-EVENT_BUS_NAME = os.environ['EVENT_BUS_NAME']
+UPLOAD_EVENT_BUS_NAME = os.environ['UPLOAD_EVENT_BUS_NAME']
+PDFS_TABLE_NAME = os.environ['PDFS_TABLE_NAME']
 
 CORS_HEADERS = {
     "Content-Type": "application/json",
@@ -22,6 +26,10 @@ CORS_HEADERS = {
     "Access-Control-Allow-Methods": "POST,OPTIONS",
 }
 
+def put_dynamo_item(table_name: str, item: dict) -> None:
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table(table_name)
+    table.put_item(Item=item)
 
 def check_quota(user_id):
     """Check/create quota. Returns (allowed, remaining)."""
@@ -61,8 +69,17 @@ def handler(event, context):
         file_id = str(uuid.uuid4())
         key = f"{user_id}/{now.year}/{now.month:02d}/{now.day:02d}/{file_id}.pdf"
 
-        s3.put_object(Bucket=BUCKET_NAME, Key=key, Body=file_data, ContentType='application/pdf')
+        s3.put_object(Bucket=RAW_PDF_BUCKET_NAME, Key=key, Body=file_data, ContentType='application/pdf')
         
+        put_dynamo_item(PDFS_TABLE_NAME, {
+            'user_id': user_id,
+            'pdf_id': file_id,
+            'status': 'uploaded',
+            'filename': filename,
+            'uploaded_at': datetime.now(timezone.utc).isoformat(),
+            'raw_s3_uri': f's3://{RAW_PDF_BUCKET_NAME}/{key}'
+        })
+
         # Increment quota
         dynamodb.Table(USER_QUOTA_TABLE_NAME).update_item(
             Key={'userId': user_id},
@@ -74,10 +91,10 @@ def handler(event, context):
         events.put_events(Entries=[{
             'Source': 'pdf-analyzer',
             'DetailType': 'PDF_UPLOADED',
-            'EventBusName': EVENT_BUS_NAME,
-            'Detail': json.dumps({'bucket': BUCKET_NAME, 'key': key, 'userId': user_id, 'fileId': file_id, 'filename': filename}),
+            'EventBusName': UPLOAD_EVENT_BUS_NAME,
+            'Detail': json.dumps({'bucket': RAW_PDF_BUCKET_NAME, 'key': key, 'userId': user_id, 'fileId': file_id, 'filename': filename}),
         }])
 
-        return {"statusCode": 200, "headers": CORS_HEADERS, "body": json.dumps({"fileId": file_id, "key": key, "remaining": remaining - 1})}
+        return {"statusCode": 200, "headers": CORS_HEADERS, "body": json.dumps({"message": "File uploaded successfully", "fileId": file_id})}
     except Exception as e:
         return {"statusCode": 500, "headers": CORS_HEADERS, "body": json.dumps({"error": str(e)})}

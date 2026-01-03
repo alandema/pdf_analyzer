@@ -11,10 +11,15 @@ export default function SignupPage() {
   // Form fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
 
   // Handle signup button click
   async function handleSignup() {
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
     // Call the auth API
     await signUp(email, password);
     
@@ -44,6 +49,13 @@ export default function SignupPage() {
           placeholder="Password (min 8 chars, upper+lower+number)"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+        />
+
+        <input
+          type="password"
+          placeholder="Confirm Password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
         />
         
         <button onClick={handleSignup}>Sign Up</button>

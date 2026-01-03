@@ -5,4 +5,7 @@ export const config = {
   clientId: process.env.NEXT_PUBLIC_CLIENT_ID,
   apiUrl: process.env.NEXT_PUBLIC_API_URL,
   region: process.env.NEXT_PUBLIC_REGION,
+  // Stripe Price IDs (public - safe to expose)
+  stripeGoldPriceId: process.env.NEXT_PUBLIC_STRIPE_GOLD_PRICE_ID,
+  stripePlatinumPriceId: process.env.NEXT_PUBLIC_STRIPE_PLATINUM_PRICE_ID,
 };

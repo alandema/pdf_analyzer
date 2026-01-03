@@ -21,20 +21,17 @@ export async function uploadPdf(idToken: string, file: File): Promise<{ fileId: 
 }
 
 export interface ProcessedFile {
-  key: string;
+  pdfId: string;
   name: string;
-  url: string;
-  lastModified: string | null;
-  size: number;
-}
-
-export interface ProcessedDate {
-  date: string;
-  files: ProcessedFile[];
+  status: string;
+  url: string | null;
+  uploadedAt: string | null;
+  processedAt: string | null;
+  size?: number;
 }
 
 export interface ProcessedPdfsResponse {
-  dates: ProcessedDate[];
+  files: ProcessedFile[];
 }
 
 export async function getProcessedPdfs(idToken: string): Promise<ProcessedPdfsResponse> {
@@ -42,5 +39,39 @@ export async function getProcessedPdfs(idToken: string): Promise<ProcessedPdfsRe
     headers: { 'Authorization': `Bearer ${idToken}` },
   });
   if (!res.ok) throw new Error('Failed to fetch processed PDFs');
+  return res.json();
+}
+
+// === STRIPE SUBSCRIPTION ===
+
+export interface Plan {
+  name: string;
+  price: string;
+  priceId: string | null;
+  features: string[];
+  uploads: number;
+}
+
+export async function getPlans(): Promise<{ plans: Plan[] }> {
+  const res = await fetch(`${config.apiUrl}/stripe/plans`);
+  if (!res.ok) throw new Error('Failed to fetch plans');
+  return res.json();
+}
+
+export async function createCheckoutSession(
+  idToken: string,
+  priceId: string,
+  successUrl: string,
+  cancelUrl: string
+): Promise<{ url: string }> {
+  const res = await fetch(`${config.apiUrl}/stripe/checkout`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${idToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ priceId, successUrl, cancelUrl }),
+  });
+  if (!res.ok) throw new Error('Failed to create checkout session');
   return res.json();
 }

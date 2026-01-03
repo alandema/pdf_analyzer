@@ -8,20 +8,23 @@ from botocore.config import Config
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from langchain_core.prompts import PromptTemplate
-from helpers.dynamo_helpers import get_dynamo_item
+from helpers.dynamo_helpers import get_dynamo_item, update_dynamo_item
 from helpers.model_helpers import get_model_from_config
 from helpers.prompt_helpers import get_prompt_from_config
+from xhtml2pdf import pisa
+import io
 load_dotenv('.env')
 
 s3 = boto3.client('s3')
 
-PDF_BUCKET = os.environ['PDF_BUCKET_NAME']
-PROCESSED_BUCKET = os.environ['PROCESSED_BUCKET_NAME']
-PROCESSING_CONFIG_TABLE_NAME = os.environ['PROCESSING_CONFIG_TABLE_NAME']
+RAW_PDF_BUCKET_NAME = os.environ['RAW_PDF_BUCKET_NAME']
+PROCESSED_PDF_BUCKET_NAME = os.environ['PROCESSED_PDF_BUCKET_NAME']
+CONFIGS_TABLE_NAME = os.environ['CONFIGS_TABLE_NAME']
+PDFS_TABLE_NAME = os.environ['PDFS_TABLE_NAME']
 
 
 class ResponseModel(BaseModel):
-    description: str = Field(description="Description of the processing result")
+    description: str = Field(description="Description of the PDF")
 
 
 def handler(event, context):
@@ -32,39 +35,72 @@ def handler(event, context):
     file_id = detail['fileId']
     filename = detail['filename']
 
-    pdf_bytes= s3.get_object(Bucket=PDF_BUCKET, Key=key)['Body'].read()
+    try:
+        update_dynamo_item(PDFS_TABLE_NAME, {'user_id': user_id, 'pdf_id': file_id}, "SET #s = :s", {
+            ':s': 'processing started',
+            '#s': 'status'
+        })
 
-    processing_config = get_dynamo_item(
-        PROCESSING_CONFIG_TABLE_NAME,
-        {'id': 'default_config'}
-    )
+        pdf_bytes = s3.get_object(Bucket=RAW_PDF_BUCKET_NAME, Key=key)['Body'].read()
 
-    today = datetime.now(timezone.utc).date()
+        processing_config = get_dynamo_item(
+            CONFIGS_TABLE_NAME,
+            {'id': 'default_pdf_processing_config'}
+        )
 
-    llm_model = get_model_from_config(processing_config)
-    prompt = get_prompt_from_config(processing_config.get('prompt_config', {}),pdf_bytes,file_id)
+        if processing_config is None:
+            raise ValueError("Missing 'default_pdf_processing_config' in configs table. Please insert configuration before processing.")
 
-    model_with_structured_output = llm_model.with_structured_output(ResponseModel)
-    chain = prompt | model_with_structured_output
+        today = datetime.now(timezone.utc).date()
 
-    response = chain.invoke({'today': str(today)})
+        llm_model = get_model_from_config(processing_config)
+        prompt = get_prompt_from_config(processing_config.get('prompt_config', {}), pdf_bytes, file_id)
 
-    if response.description:
-        print("Processing description:", response.description)
+        model_with_structured_output = llm_model.with_structured_output(ResponseModel)
+        chain = prompt | model_with_structured_output
 
-    response = s3.get_object(Bucket=PDF_BUCKET, Key=key)
-    pdf_data = response['Body'].read()
+        response = chain.invoke({'today': str(today)})
 
-    # Build processed key using the validated filename from upload
-    # Remove .pdf extension and add _processed.pdf
-    base_filename = filename[:-4] if filename.lower().endswith('.pdf') else filename
-    now = datetime.now(timezone.utc)
-    processed_key = f"{user_id}/{now.year}/{now.month:02d}/{now.day:02d}/{base_filename}_processed.pdf"
 
-    # Save to processed bucket
-    s3.put_object(Bucket=PROCESSED_BUCKET, Key=processed_key, Body=pdf_data, ContentType='application/pdf')
+        # Read template
+        template_path = os.path.join(os.path.dirname(__file__), 'models', 'processed.html')
+        with open(template_path, 'r', encoding='utf-8') as f:
+            template = f.read()
 
-    return {'statusCode': 200, 'processedKey': processed_key}
+        # Fill template
+        filled = template
+        filled = filled.replace('{{ description }}', response.description)
+
+
+        # Convert HTML to PDF
+        pdf_out = io.BytesIO()
+        pisa.CreatePDF(io.StringIO(filled), dest=pdf_out, encoding='utf-8')
+        pdf_data = pdf_out.getvalue()
+
+        # Save
+        base_filename = filename[:-4] if filename.lower().endswith('.pdf') else filename
+        now = datetime.now(timezone.utc)
+        processed_key = f"{user_id}/{now.year}/{now.month:02d}/{now.day:02d}/{base_filename}_processed.pdf"
+
+        s3.put_object(Bucket=PROCESSED_PDF_BUCKET_NAME, Key=processed_key, Body=pdf_data, ContentType='application/pdf')
+
+        update_dynamo_item(PDFS_TABLE_NAME, {'user_id': user_id, 'pdf_id': file_id}, "SET #s = :s, processed_s3_uri = :uri, processed_at = :pa", {
+            ':s': 'processing completed',
+            ':uri': f's3://{PROCESSED_PDF_BUCKET_NAME}/{processed_key}',
+            ':pa': datetime.now(timezone.utc).isoformat(),
+            '#s': 'status'
+        })
+
+        return {'statusCode': 200, 'processedKey': processed_key}
+
+    except Exception as e:
+        print(f"Error processing PDF: {e}")
+        update_dynamo_item(PDFS_TABLE_NAME, {'user_id': user_id, 'pdf_id': file_id}, "SET #s = :s, error_message = :err", {
+            ':s': 'processing failed',
+            ':err': str(e),
+            '#s': 'status'
+        })
+        raise  # Re-raise to trigger DLQ
 
 if __name__ == "__main__":
     with open('src/data/tests/events/test.json') as f:

@@ -145,3 +145,19 @@ h2 {
   color: #232f3e;
   text-align: center;
 }
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 3px solid #ccc;
+  border-top-color: #ff9900;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

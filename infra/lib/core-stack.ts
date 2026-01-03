@@ -1,19 +1,12 @@
-import { Stack, StackProps, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { Stack, StackProps, RemovalPolicy } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
-import { createStackParameters, getSsmParameters} from './parameters';
-
-const inputSsmParams = {
-  NEW_USER_QUOTA: 'NEW_USER_QUOTA'
-};
-
+import { createStackParameters } from './parameters';
 
 export class CoreStack extends Stack {
   constructor(scope: Construct, id: string, stackEnv: string, localEnv: any, props: StackProps) {
     super(scope, id, props);
-
-    const ssmParams = getSsmParameters(this, stackEnv, inputSsmParams);
 
     // Cognito User Pool for authentication
     const userPool = new cognito.UserPool(this, 'UserPool', {
@@ -46,6 +39,7 @@ export class CoreStack extends Stack {
 
     // DynamoDB table for user quota tracking
     const userQuotaTable = new dynamodb.TableV2(this, 'UserQuotaTable', {
+      tableName: `pdf-analyzer-user-quota-config-${stackEnv}`,
       partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       removalPolicy: stackEnv === 'production' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,

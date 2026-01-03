@@ -1,9 +1,10 @@
-import { Stack, StackProps, RemovalPolicy } from 'aws-cdk-lib';
+import { Stack, StackProps, RemovalPolicy, DockerImage } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
+import * as fs from 'fs';
 import { execSync } from 'child_process';
 import { Construct } from 'constructs';
 import { createStackParameters } from './parameters';
@@ -14,10 +15,6 @@ export class FrontendStack extends Stack {
     super(scope, id, props);
 
     const frontendPath = path.join(__dirname, '../../src/frontend');
-
-    // Build Next.js static export
-    console.log('Building Next.js frontend...');
-    execSync('npm install && npm run build', { cwd: frontendPath, stdio: 'inherit' });
 
     // S3 Bucket for static website hosting
     const websiteBucket = new s3.Bucket(this, 'WebsiteBucket', {
@@ -49,9 +46,27 @@ export class FrontendStack extends Stack {
       ],
     });
 
-    // Deploy Next.js static export to S3 and invalidate CloudFront
     new s3deploy.BucketDeployment(this, 'DeployWebsite', {
-      sources: [s3deploy.Source.asset(path.join(frontendPath, 'out'))],
+      sources: [s3deploy.Source.asset(frontendPath, {
+        exclude: ['node_modules', '.next', 'out', '.git'],
+        bundling: {
+          image: DockerImage.fromRegistry('alpine'),
+          local: {
+            tryBundle(outputDir: string) {
+              try {
+                console.log('Building Next.js frontend...');
+                execSync('npm install && npm run build', { cwd: frontendPath, stdio: 'inherit' });
+                const source = path.join(frontendPath, 'out');
+                fs.cpSync(source, outputDir, { recursive: true });
+                return true;
+              } catch (error) {
+                console.error('Frontend build failed:', error);
+                return false;
+              }
+            }
+          }
+        }
+      })],
       destinationBucket: websiteBucket,
       distribution: distribution,
       distributionPaths: ['/*'],

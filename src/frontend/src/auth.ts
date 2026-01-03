@@ -1,4 +1,5 @@
 import { config } from './config';
+import toast from 'react-hot-toast';
 
 interface CognitoAuthResult {
   IdToken: string;
@@ -22,7 +23,39 @@ async function cognitoFetch(action: string, body: object): Promise<CognitoRespon
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.message || data.__type || 'Request failed');
+  if (!res.ok) {
+    let errorMessage = data.message || data.__type || 'Request failed';
+    let displayMessage = errorMessage;
+
+    switch (data.__type) {
+      case 'UserNotConfirmedException':
+        displayMessage = 'Please confirm your email before signing in.';
+        break;
+      case 'NotAuthorizedException':
+        displayMessage = 'Incorrect email or password.';
+        break;
+      case 'UserNotFoundException':
+        displayMessage = 'User not found. Please sign up first.';
+        break;
+      case 'UsernameExistsException':
+        displayMessage = 'An account with this email already exists.';
+        break;
+      case 'CodeMismatchException':
+        displayMessage = 'Invalid confirmation code.';
+        break;
+      case 'ExpiredCodeException':
+        displayMessage = 'Confirmation code has expired.';
+        break;
+      case 'TooManyRequestsException':
+        displayMessage = 'Too many attempts. Please try again later.';
+        break;
+      default:
+        displayMessage = errorMessage;
+    }
+
+    toast.error(displayMessage);
+    throw new Error(errorMessage);
+  }
   return data;
 }
 
