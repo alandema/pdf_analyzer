@@ -48,15 +48,15 @@ export class FrontendStack extends Stack {
 
     new s3deploy.BucketDeployment(this, 'DeployWebsite', {
       sources: [s3deploy.Source.asset(frontendPath, {
-        exclude: ['node_modules', '.next', 'out', '.git'],
+        exclude: ['node_modules', '.nuxt', '.output', '.git'],
         bundling: {
           image: DockerImage.fromRegistry('alpine'),
           local: {
             tryBundle(outputDir: string) {
               try {
-                console.log('Building Next.js frontend...');
+                console.log('Building Nuxt frontend...');
                 execSync('npm install && npm run build', { cwd: frontendPath, stdio: 'inherit' });
-                const source = path.join(frontendPath, 'out');
+                const source = path.join(frontendPath, '.output', 'public');
                 fs.cpSync(source, outputDir, { recursive: true });
                 return true;
               } catch (error) {
