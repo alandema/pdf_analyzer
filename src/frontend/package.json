@@ -1,22 +1,13 @@
 {
   "name": "pdf-analyzer-frontend",
-  "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview"
   },
   "dependencies": {
-    "next": "^16.1.1",
-    "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "react-hot-toast": "^2.6.0"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/react": "^18.3.0",
-    "typescript": "^5.0.0"
+    "nuxt": "^4.3.1"
   }
 }

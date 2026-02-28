@@ -1,7 +1,7 @@
 cdk.context.json
 test_notebooks/
-.next
-out
+.nuxt
+.output
 *.js
 !jest.config.js
 *.d.ts
